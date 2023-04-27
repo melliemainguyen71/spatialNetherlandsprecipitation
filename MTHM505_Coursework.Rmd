@@ -1,0 +1,513 @@
+---
+output: pdf_document
+---
+
+```{=tex}
+\def\begincols{\begin{columns}}
+\def\begincol{\begin{column}}
+\def\endcol{\end{column}}
+\def\endcols{\end{columns}}
+```
+```{r eval=T, echo=F}
+def.chunk.hook  <- knitr::knit_hooks$get("chunk")
+knitr::knit_hooks$set(chunk = function(x, options) {
+  x <- def.chunk.hook(x, options)
+  ifelse(options$size != "normalsize", paste0("\\", options$size,"\n\n", x, "\n\n \\normalsize"), x)
+})
+
+```
+
+```{r eval=T, echo=F}
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
+
+# Table of content
+## Question 1
+### Part 1a
+### Part 1b
+### Part 1c
+### Part 1d
+### Part 1e
+### Part 1f
+### Part 1g
+### Part 1h
+
+## Question 2
+### Part 2a
+### Part 2b
+### Part 2c
+### Part 2d
+### Part 2e
+### Part 2f
+
+## Question 3
+### Part 3a
+### Part 3b
+### Part 3c
+### Part 3d
+
+```{r,warning=FALSE,message=FALSE, result=F}
+# Load the required packages
+require(ggplot2)
+require(tidyverse)
+require(MASS)
+require(mgcv)
+require(dplyr)
+require(magrittr)
+require(factoextra)
+require(reshape2)
+require(knitr)
+
+require(mnormt)
+require(readr)
+require(sf)
+require(tmap)
+require(geoR)
+require(maptools)
+require(gstat)
+```
+
+\newpage
+## Question 1
+
+```{r,warning=FALSE,message=FALSE, result=F}
+ntl <- read_csv("netherlands.csv")
+
+# Convert to geodata object
+geo_ntl <- as.geodata(ntl, coords.col = 2:3, data.col = 4)
+```
+
+### 1a
+
+Plot the precipitation of Netherlands in September 2019 by geodata
+
+```{r}
+plot(geo_ntl)
+```
+
+Produce numerical summaries
+
+```{r}
+a <- summary(ntl$precip)
+at <- t(a)
+kable(at)
+```
+
+The top right plots the precipitation against latitude. It can be seen that higher latitude recorded higher precipitation. This reflects that northern Netherlands recorded higher precipitation than the southern.
+
+The bottom left plots the precipitation against longitude. Rainfall volume seems to widely vary at right longitude, while at left-most longitude they center around 100. This can be due to the fact that there are fewer observations recorded there.
+
+The top left plots the precipitation all over Netherlands, with blue, green, yellow and red respectively represent the lowest, second, third and highest quartile in the precipitation range. As mentioned, the southern region is covered in blue, while moving up to the north, it gradually changes to green, yellow and then red in the north of Netherlands. 
+There is clearly spatial correlation. Regions of the same latitude seem to have similar or nearly similar precipitation, while precipitation of regions of the same longitude can vary (shown in the mixture of blue, green and yellows points in the same longitude)
+
+From the numerical summary and density plot, precipitation ranges from nearly 34 to over 185, with mean = 100 and median = 106.
+
+### 1b
+
+Select 3 observed locations
+
+```{r}
+# Random choose 3 locations
+set.seed(1234)
+obs_rows <- sample(1:nrow(ntl), size = 3)
+
+# Separate training set and the 3 chosen locations for testing
+tst <- ntl[obs_rows,]
+trn <- ntl[-obs_rows,]
+
+# Label test locations as A, B, C
+tst$label <- c("A", "B", "C")
+tst
+
+```
+
+### 1c
+
+Calculate and plot the sample variogram of the data, first with assumption that mean is constant. Then we will test variogram with different adjustments of mean (transformation or linear/ quadratic trend)
+
+```{r}
+# Convert training set to geodata
+geo_trn <- as.geodata(trn, coords.col = 2:3, data.col = 4)
+
+# Calculate the sample variogram with assumption that mean is constant
+sample_vario_full <- variog(geo_trn, option='bin')
+
+# Test different adjustment of mean assumption
+sample_vario_lmda2 <- variog(geo_trn, option='bin', lambda=2)
+sample_vario_lmda0 <- variog(geo_trn, option='bin', lambda=0)
+sample_vario_trnd1 <- variog(geo_trn, option='bin', trend = '1st')
+sample_vario_trnd2 <- variog(geo_trn, option='bin', trend = '2nd')
+par(mfrow=c(2,2))
+plot(sample_vario_lmda2, pch = 19)
+plot(sample_vario_lmda0, pch = 19)
+plot(sample_vario_trnd1, pch = 19)
+plot(sample_vario_trnd2, pch = 19)
+
+# variogram with assumption that mean is constant, cut max distance = 2
+sample_vario <- variog(geo_trn, option='bin', max.dist=2)
+
+# Plot the sample variogram
+par(mar=c(4,4,4,2), mfrow=c(1,2))
+plot(sample_vario_full, pch = 19, main = "Sample variogram of precipitation \n in the Netherlands")
+plot(sample_vario, pch = 19, main = "Sample variogram of precipitation \n in the Netherlands (set maximum distance)")
+```
+The bottom variograms when we assume the mean has a first or second order polynomial on the coordinates are not stable and continuous. The variance fluctuates over the range of distances and does not reach a sensible sill. The top variograms when we transform the mean share the same trend with the original variogram (with assumption of constant mean by default).
+
+We use the original variogram. We need to set a maximum distance = 2 before fitting a model because when the distance is larger than 2, the variance starts to drop. This decrease does not describe the variance of points which are far apart, but due to the fact that there are not as many data points of this distance as of closer distance. Thus, from distance = 2, variance starts to drop before going up at 3.
+
+We need to include a nugget. As can be seen from the right plot, the variance at distance = 0 is larger than 0 (could be around 100), therefore a nugget is needed to reflect this variance.
+
+### 1d
+
+Fit the variogram
+
+```{r}
+# fit matern 3/2
+vari.mat1.5 <- variofit(sample_vario, kappa=1.5)
+
+# fit matern 5/2
+vari.mat2.5 <- variofit(sample_vario, kappa=2.5)
+
+# fit matern estimate kappa
+vari.matest <- variofit(sample_vario, kappa=1.5, fix.kappa = FALSE, cov.model = 'matern')
+
+# try different model
+model_list <- c("exponential", "gaussian", "spherical", "circular", "cubic", "wave", "power", "powered.exponential", "cauchy", "gneiting")
+min_sum_sq <- c()
+
+for (i in 1:length(model_list)){
+  vari_i <- variofit(sample_vario, cov.model = model_list[i])
+  # get the minimized weighted sum of squares
+  sos_i <- vari_i$value
+  pars_i <- vari_i$cov.pars
+  nugg_i <- vari_i$nugget
+  # print the result
+  min_sum_sq <- c(min_sum_sq, sos_i)
+}
+
+model_list <- c(model_list, "mattern 3/2", "mattern 5/2", "mattern est")
+min_sum_sq <- c(min_sum_sq, vari.mat1.5$value, 
+                vari.mat2.5$value, vari.matest$value)
+
+# List of model and minimized weighted sum of square of residuals
+variog_table <- data.frame(model = model_list, min_sum_sq = min_sum_sq)
+variog_table <- variog_table[order(variog_table$min_sum_sq),]
+kable(variog_table)
+
+# refit the power variogram
+vari_pow <- variofit(sample_vario, cov.model = 'power')
+# refit the cauchy variogram
+vari_cau <- variofit(sample_vario, cov.model = 'cauchy')
+
+vari_pow$cov.pars
+vari_pow$nugget
+vari.mat1.5$cov.pars
+vari.mat1.5$nugget
+vari_cau$cov.pars
+vari_cau$nugget
+vari.mat2.5$cov.pars
+vari.mat2.5$nugget
+
+par(mar=c(4,4,2,2), mfrow=c(1,2))
+plot(sample_vario, pch = 19, main = "Power and Matern 3/2")
+lines(vari_pow)
+lines(vari.mat1.5, lty = 2)
+plot(sample_vario, pch = 19, main = "Matern 5/2 and Cauchy")
+lines(vari_cau)
+lines(vari.mat2.5, lty = 2)
+```
+By this we assume that the mean function is constant (variogram by default). In the earlier part we have tested with other assumptions of mean, but ending up with constant mean assumption over the region.
+
+We iterate the variogram with different assumptions about covariance functions, with fitted nugget and let it estimate the paramteters using weighted least squares. With Matern model, we test some assumptions of smoothness parameter kappa, including 3/2 and 5/2. With other models, we do not force the nugget to be zero, and fit the variogram by assuming different covariance models. Comparing different fitted models by the minimised weighted sum of squares, we can see that the Covariance Model = Power, Matern 3/2, Matern 5/2 and Cauchy result in the least residuals. We plot these fitted models to our sample variogram.
+
+The matern 3/2 captures better the variance at close distance, while the power underestimate the nugget but looks better at far distance (when distance >1). The Matern 5/2 and Cauchy are quite identical, and both slightly overestimate the nugget. Except for the Power which estimates the nugget at around 34, The matern 3/2 estimates the nugget at over 174 and the other two models estimate the nugget at more than 190. The correlation length of Power and Matern 3/2 models are quite similar, 1.1 (Power) and Matern 3/2 (1.05). Meanwhile, Cauchy returns high correlation length (1.4) and Matern 5/2 returns much lower correlation length (0.6).
+
+Out of the 4 models, Power does not have a sensible partial sill (918, much lower than 2000). The other three models all have the partial sill larger than 2500, which resonates in the variogram plot.
+
+Validate variogram model: Power, Matern 3/2, Matern 5/2 and Cauchy
+
+```{r}
+# Validate Variogram model Power
+xv.ml1 <- xvalid(geo_trn, model = vari_pow)
+par(mfrow=c(3,2),mar=c(4,2,2,2))
+plot(xv.ml1, error = TRUE, std.error = FALSE, pch = 19, main = "Validate Power")
+
+# Validate Variogram model Matern 3/2
+xv.ml2 <- xvalid(geo_trn, model = vari.mat1.5)
+par(mfrow=c(3,2),mar=c(4,2,2,2))
+plot(xv.ml2, error = TRUE, std.error = FALSE, pch = 19, main = "Validate Matern 3/2")
+
+# Validate Variogram model Matern 5/2
+xv.ml3 <- xvalid(geo_trn, model = vari.mat2.5)
+par(mfrow=c(3,2),mar=c(4,2,2,2))
+plot(xv.ml3, error = TRUE, std.error = FALSE, pch = 19, main = "Validate Matern 5/2")
+
+# Validate Variogram model Cauchy
+xv.ml4 <- xvalid(geo_trn, model = vari_cau)
+par(mfrow=c(3,2),mar=c(4,2,2,2))
+plot(xv.ml4, error = TRUE, std.error = FALSE, pch = 19, main = "Validate Cauchy")
+
+# Summary statistics for the errors and standard errors
+summary(xv.ml2)
+summary(xv.ml3)
+summary(xv.ml4)
+
+```
+
+From the validation plot, Power is a poor model. Its residuals do not follow normal distribution, and residuals are allocated by regions: higher residuals lie in higher latitude, while lower residuals lie in lower latitude. We can clearly see the red and blue regions in the error map.
+
+The other three models are quite a good fit. The Leave-on-out residuals are quite Normal, and there is no strong patterns or systematic biases in the residuals. In all the three models, there is a relatively strong relationship between the fitted and true values (top left plot), although we do slightly underestimate the data values that are over 150. The residuals are reasonably Normal - closely following the QQ line (top right). There’s no clear pattern in the spatial residuals, with blue and red locations (corresponding to the sign of the residual) mostly randomly scattered (middle left). Histogram of errors show a reasonably normal distribution (middle right). In the bottom two plots, we can see that the errors of data (bottom right) above 150 tend to be positive - which confirms that the models underestimate data above 150 while errors of data under 50 tend to be negative - the models overestimate lower values. Errors by prediction scatter randomly.
+
+Statistical summary of the errors and standard errors of the three models shows that, out of the three models, errors of model Matern 3/2 are closer together (ranging from -35 to 56 with sd = 13.85) while those of the other two are more distant. 
+
+For these reasons, Matern 3/2 is the best fit model out of these models. 
+
+### 1e
+
+Fit the maximum likelihood model
+
+```{r}
+# Loop through models and trends, compare by loglikelihood and AIC
+ml_model <- c("exponential", "spherical", "circular", "cubic", "matern")
+ml_trend <- c('cte','1st','2nd')
+
+model <- c()
+trend <- c()
+llh_list <- c()
+AIC_list <- c()
+
+for (i in 1:length(ml_model)){
+  for (j in 1: length(ml_trend)){
+    model_ml <- likfit(geo_trn, ini.cov.pars = c(2000,1), cov.model = ml_model[i],trend = ml_trend[j], fix.kappa = FALSE, fix.lambda = FALSE)
+    loglike <- model_ml$loglik
+    AIC <- model_ml$AIC
+    model <- c(model, ml_model[i])
+    trend <- c(trend, ml_trend[j])
+    llh_list <- c(llh_list, loglike)
+    AIC_list <- c(AIC_list, AIC)
+  }
+}
+
+# List of model results
+mlh_table <- data.frame(model = model, trend = trend, 
+                        loglikehood = llh_list, AIC = AIC_list)
+mlh_table <- mlh_table[order(mlh_table$AIC),]
+kable(mlh_table)
+```
+
+From the table results, it can be seen that models with the lowest scores of AIC and comparatively high maximised log-likelihood all have the mean be the first order polynomial on the coordinates. We will look into these four models: cubic, spherical, exponential and matern.
+
+```{r}
+ml_cubic <- likfit(geo_trn, ini.cov.pars = c(2000,1), trend = '1st' , cov.model = 'cubic', fix.lambda = FALSE)
+
+ml_mat15 <- likfit(geo_trn, ini.cov.pars = c(2000,1), trend = '1st', cov.model = 'matern', kappa = 3/2, fix.lambda = FALSE)
+
+ml_mat25 <- likfit(geo_trn, ini.cov.pars = c(2000,1), trend = '1st', cov.model = 'matern', kappa = 5/2, fix.lambda = FALSE)
+
+ml_spher <- likfit(geo_trn, ini.cov.pars = c(2000,1), trend = '1st' , cov.model = 'spherical', fix.lambda = FALSE)
+
+ml_expnt <- likfit(geo_trn, ini.cov.pars = c(2000,1), trend = '1st' , cov.model = 'exp', fix.lambda = FALSE)
+
+ml_cubic
+ml_mat15
+ml_mat25
+ml_spher
+ml_expnt
+
+```
+
+All these models estimate the estimate of lambda = 0.5, meaning that the transformation is the square root of the mean, while the nugget is estimated more than 1. Estimates of correlation length vary from 0.1 to 0.5.
+
+Betas indicate the coefficients of the mean function, with beta1 and beta2 respectively coefficients of the spatial coordinates. All models result in high beta2 (~ from 4 to 5), confirming the positively linear relationship between data values and latitude mentioned in part a. Beta1 are estimated to be around -1, showing a slightly negative relationship with longitude.
+
+We validate these 5 models
+
+```{r}
+# Validate models
+ml_list <- list(ml_cubic,ml_mat15,ml_mat25,ml_spher,ml_expnt)
+ml_list_name <- c("ml_cubic","ml_mat15","ml_mat25","ml_spher","ml_expnt")
+err_vec <- vector("list", length(ml_list))
+
+# Validate Maximum likelihood models
+for (i in 1:length(ml_list)){
+  xv.mlh <- xvalid(geo_trn, model = ml_list[[i]])
+  par(mfrow=c(3,2),mar=c(4,2,2,2))
+  plot(xv.mlh, error = TRUE, std.error = FALSE, pch = 19)
+  err_vec[[i]] <- xv.mlh$error
+}
+
+# List of model validate results
+par(mar=c(4,2,2,2))
+boxplot(err_vec)
+```
+From the plots, all look a good fit to the data. All 6 plots of 5 models are comparatively identical. The predicted values scatter on both sides of the "data line" (top left) and the probability follow strictly the QQ line, showing a good Normal distribution (top right). Middle left map show a mixture of blue and red points over the region, and middle right shows histogram of error which looks normal. The bottom plots illustrate errors against data and predicted values, with no strong patterns to be found. However, as in the Variogram model, all models seems to overestimate data under 50 and underestimate data above 150. This result is acceptable, and as we have plugged in most optional arguments, we will try improving models by other methods in later parts.
+
+The fourth model, which is spherical, has the shortest interquartile range of errors, thus, could be considered the best models in maximum likelihood.
+
+### 1f
+
+Predict precipitation at A, B, C
+
+```{r}
+# Predict A,B,C
+preds_vr <- krige.conv(geo_trn, loc=tst[2:3], krige=krige.control(obj.model=vari.mat1.5))
+preds_ml <- krige.conv(geo_trn, loc=tst[2:3], krige=krige.control(obj.model=ml_spher))
+
+pred_table <- data.frame(true = tst[4], vario = preds_vr$predict, ML = preds_ml$predict,
+                         point = tst[5])
+
+# Plot predictions and true values
+pred_long <- reshape2::melt(pred_table)
+ggplot(pred_long, aes(x = label, y = value, color = variable)) +
+  geom_point() +
+  labs(x = "Point", y = "Precipitation", color = "Actual/Predicted") +
+  ggtitle("True values and Predictions at A,B,C")
+
+```
+
+Compare predictions and true values
+The actual values (red points) and predicted values (green by variogram and blue by ML) are shown in the above plot. The actual values and predictions are quite close at A and B, however, both models overestimated precipitation at C. Both predicted C to have around 45, however, observed figure at C was just above 30.
+At all three locations, both estimation methods produce closely similar prediction (in terms of the mean prediction).
+
+### 1g
+
+Plot the mean and variance from maximum likelihood
+
+```{r}
+# Create grid of prediction points
+grd <- expand.grid(longitude=seq(min(geo_ntl$coords[,1]), max(geo_ntl$coords[,1]), by=0.05),
+                   latitude=seq(min(geo_ntl$coords[,2]), max(geo_ntl$coords[,2]), by=0.05))
+
+# Predict mean and variance at grid points using kriging
+pred_grd <- krige.conv(geo_trn, loc=grd, krige=krige.control(obj.model=ml_spher))
+
+# Plot mean and variance
+image(pred_grd, col = viridis::viridis(100), zlim = c(0,max(c(pred_grd$predict))),
+      coords.data = geo_trn[1]$coords, main = 'Mean', xlab = 'Longitude', ylab = 'Latitude',
+      x.leg = c(7.2, 9), y.leg = c(52,52.2))
+image(pred_grd, values = pred_grd$krige.var, col = heat.colors(100)[100:1],
+      zlim = c(0,max(c(pred_grd$krige.var))), coords.data = geo_trn[1]$coords,
+      main = 'Variance', xlab = 'Longitude', ylab = 'Latitude', 
+      x.leg = c(7.2, 9), y.leg = c(52,52.2))
+```
+### 1h
+
+Fit a Bayesian model using discrete priors.
+
+From the estimates of multiple maximum likelihood models, we recall that the lambda is around 0.5, the nugget is more than 1 and the phi ranges from 0.1 to 0.5. Besides, from the previous analysis, we can have a reasonable assumption that the mean is the first order polynomial of coordinations and the covariance matrix is spherical.
+
+We can use estimates of parameters from maximum likelihood spherical as reference.
+
+```{r}
+ml_spher$parameters.summary
+```
+
+Build Bayes GP with and without nugget
+
+```{r}
+# Recreate a grid with degree = 0.1 to reduce burden on computer
+grd2 <- expand.grid(longitude=seq(min(geo_ntl$coords[,1]), max(geo_ntl$coords[,1]), by=0.1),
+                   latitude=seq(min(geo_ntl$coords[,2]), max(geo_ntl$coords[,2]), by=0.1))
+
+ex.grid <- as.matrix(grd2)
+
+# Bayes GP without nugget
+ex.bayes_1 <- krige.bayes(geodata = geo_trn, loc=ex.grid,
+                        model = model.control(trend.d = "1st", 
+                                              trend.l = "1st", 
+                                              cov.m="spherical", 
+                                              lambda = 0.5),
+                        prior = prior.control(phi.discrete=seq(0, 1, l=21),
+                                              phi.prior="reciprocal"))
+
+# Bayes GP with nugget
+ex.bayes_2 <- krige.bayes(geodata = geo_trn, loc=ex.grid,
+                        model = model.control(trend.d = "1st", 
+                                              trend.l = "1st", 
+                                              cov.m="spherical", 
+                                              lambda = 0.5),
+                        prior = prior.control(phi.discrete=seq(0, 1, l=21),
+                                              phi.prior="reciprocal",
+                                              tausq.rel.discrete = seq(1,2,l=11),
+                                              tausq.rel.prior = 'reciprocal'))
+```
+
+We will summarise our posterior distributions, compare them against each other and compare them with earlier estimates.
+
+From the four plots below, the posterior of the model 2 (with nugget) is quite close with the parameter estimates from the maximum likelihood model, especially betas parameters and variance. For phi and nugget, maximum likelihood estimates are out of interquartile range of distributions from Bayes (with nugget), however, they are not too far away.
+
+Meanwhile, the posterior distribution of the model 1 (without nugget) only closely matches with the maximum likelihood estimates in beta parameters. Its variance and correlation length are far from the estimates by ML. 
+
+Comparing Bayesian with and without nugget, we can see that the Bayesian 1 without nugget produce much higher estimates of variance (mean around 4) than the Bayesian 2 with nugget (mean around 1). Distribution of correlation length and nugget by Bayesian 2 are sensible, quite close with our earlier estimates. Both Bayesian models estimate quite similar betas parameters.
+
+We will use cross-validation to validate both models
+
+```{r}
+boxplot(ex.bayes_1$posterior$sample[2:6], main = "Other parameters (Bayes 1 posterior distribution and ML (red))")
+points(ml_spher$parameters.summary[2:6,2], col="red", pch=19)
+
+boxplot(ex.bayes_1$posterior$sample[1], main = "Beta0 (Bayes 1 posterior distribution and ML (red))")
+points(ml_spher$parameters.summary[1,2], col="red", pch=19)
+```
+
+```{r}
+boxplot(ex.bayes_2$posterior$sample[2:6], main = "Other parameters (Bayes 2 posterior distribution and ML (red))")
+points(ml_spher$parameters.summary[2:6,2], col="red", pch=19)
+
+boxplot(ex.bayes_2$posterior$sample[1], main = "Beta0 (Bayes 2 posterior distribution and ML (red))")
+points(ml_spher$parameters.summary[1,2], col="red", pch=19)
+```
+
+```{r}
+# Prior and posterior for the parameter phi
+plot(ex.bayes_1, type="h", tausq.rel = FALSE, col=c("red", "blue"))
+
+
+# Prior and posterior for the parameter phi
+plot(ex.bayes_2, type="h", tausq.rel = TRUE, col=c("red", "blue"))
+
+# Plot histograms with samples from the posterior
+par(mfrow=c(1,3))
+hist(ex.bayes_2)
+```
+For each model, produce predictions for locations A, B and C.
+
+```{r}
+# Predict A,B,C with Bayes
+ex.bayes_1_pred <- krige.bayes(geodata = geo_trn, loc=tst[2:3],
+                        model = model.control(trend.d = "1st", 
+                                              trend.l = "1st", 
+                                              cov.m="spherical", 
+                                              lambda = 0.5),
+                        prior = prior.control(phi.discrete=seq(0, 1, l=21),
+                                              phi.prior="reciprocal"))
+
+ex.bayes_2_pred <- krige.bayes(geodata = geo_trn, loc=tst[2:3],
+                        model = model.control(trend.d = "1st", 
+                                              trend.l = "1st", 
+                                              cov.m="spherical", 
+                                              lambda = 0.5),
+                        prior = prior.control(phi.discrete=seq(0, 1, l=21),
+                                              phi.prior="reciprocal",
+                                              tausq.rel.discrete = seq(1,2,l=11),
+                                              tausq.rel.prior = 'reciprocal'))
+
+# Plot prediction
+pred_table$bayes1 <- ex.bayes_1_pred$predictive$mean
+pred_table$bayes2 <- ex.bayes_2_pred$predictive$mean
+
+# Prediction results from all models
+pred_table
+```
+
+```{r}
+# Plot predictions and true values
+pred_long <- reshape2::melt(pred_table)
+ggplot(pred_long, aes(x = label, y = value, color = variable)) +
+  geom_point() +
+  labs(x = "Point", y = "Precipitation", color = "Actual/Predicted") +
+  ggtitle("True values and Predictions at A,B,C")
+```
+
+As can be seen from the plot, Bayesian without nugget poorly predicts precipitation at A, but performs similarly with other models at B and C, especially at C, its estimate is closest to the actual value. Meanwhile, Bayesian 2 performs similarly with the other two models at predicting values at A, B and C.
