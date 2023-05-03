@@ -22,31 +22,6 @@ library(knitr)
 opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
 ```
 
-# Table of content
-## Question 1
-### Part 1a
-### Part 1b
-### Part 1c
-### Part 1d
-### Part 1e
-### Part 1f
-### Part 1g
-### Part 1h
-
-## Question 2
-### Part 2a
-### Part 2b
-### Part 2c
-### Part 2d
-### Part 2e
-### Part 2f
-
-## Question 3
-### Part 3a
-### Part 3b
-### Part 3c
-### Part 3d
-
 ```{r,warning=FALSE,message=FALSE, result=F}
 # Load the required packages
 require(ggplot2)
