@@ -1,4 +1,4 @@
-# spatialNetherlandsprecipitation
+# Spatial Modelling of Netherlands precipitation
 Spatial Modelling of Netherlands precipitation using three methods variogram, Gaussian Process model using maximum likelihood, and Bayesian model.
 
 The dataset contains 220 measurements of total monthly precipitation in the Netherlands in September 2019. This dataset was downloaded from the Copernicus Climate Data Store [1]. In the dataset, each row contains a station name, longitude and latitude of the observation station, and total precipitation for the month in millimetres.
